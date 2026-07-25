@@ -1,0 +1,19 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with: { cache: true }
+      - name: Correctness
+        run: |
+          pixi run mojo build tests/test_embed.mojo -I src -o test_embed
+          ./test_embed
+      - name: Benchmark (informational)
+        run: |
+          pixi run mojo build bench/bench.mojo -I src -o bench
+          ./bench
