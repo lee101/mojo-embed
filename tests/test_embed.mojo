@@ -26,12 +26,13 @@ def main() raises:
     print("distance")
     var a = List[Float32]()
     var b = List[Float32]()
-    for i in range(128):
+    # 131 is deliberately not a multiple of either f32 or int8 SIMD width.
+    for i in range(131):
         a.append(Float32(i % 7) - 3.0)
         b.append(Float32(i % 5) - 2.0)
 
     var expect = Float32(0.0)
-    for i in range(128):
+    for i in range(131):
         expect += a[i] * b[i]
     bad += check("dot_f32 vs scalar", dot_f32(Span(a), Span(b)), expect, 1e-2)
 

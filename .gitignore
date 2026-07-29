@@ -1,5 +1,6 @@
 .pixi/
+__pycache__/
+*.py[cod]
 *.mojopkg
 /build/
 test_embed
-bench

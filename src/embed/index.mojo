@@ -11,16 +11,15 @@ scan walks memory linearly and the prefetcher does its job.
 """
 
 from std.algorithm import parallelize
-from std.math import sqrt
-from std.sys.info import num_performance_cores, simd_width_of
+from std.sys.info import num_performance_cores
 
 from embed.distance import dot_i8
-from embed.quantize import I8_WIDTH, QuantizedVector, l2_norm, quantize
+from embed.quantize import QuantizedVector, quantize
 
 comptime DEFAULT_TOP_K = 10
 
-# Below this many vectors, spawning threads costs more than the scan saves.
-comptime PARALLEL_THRESHOLD = 20000
+# Thread only when the scan is large enough to amortise startup.
+comptime PARALLEL_WORK_THRESHOLD = 15_000_000
 
 
 struct SearchHit(ImplicitlyCopyable, Movable):
@@ -41,16 +40,14 @@ struct Index(Movable):
 
     var dim: Int
     var data: List[Int8]
-    var scales: List[Float32]
-    var norms: List[Float32]
+    var factors: List[Float32]
     var ids: List[Int]
     var count: Int
 
     def __init__(out self, dim: Int):
         self.dim = dim
         self.data = List[Int8]()
-        self.scales = List[Float32]()
-        self.norms = List[Float32]()
+        self.factors = List[Float32]()
         self.ids = List[Int]()
         self.count = 0
 
@@ -58,9 +55,8 @@ struct Index(Movable):
         return self.count
 
     def memory_bytes(self) -> Int:
-        # int8 payload plus two float32 per vector. The point of the whole
-        # design: 768 dims costs 776 bytes, not 3072.
-        return self.count * (self.dim + 8)
+        # Store scale / norm once because that ratio is all cosine search uses.
+        return self.count * (self.dim + 4)
 
     def add(mut self, id: Int, values: Span[Float32, _]) raises:
         """Quantise and append one vector."""
@@ -73,20 +69,18 @@ struct Index(Movable):
             )
 
         var q = quantize(values)
-        for i in range(self.dim):
-            self.data.append(q.data[i])
-        self.scales.append(q.scale)
-        self.norms.append(q.norm)
+        self.data.extend(Span(q.data))
+        self.factors.append(q.scale / q.norm if q.norm > 0.0 else 0.0)
         self.ids.append(id)
         self.count += 1
 
     def add_quantized(mut self, id: Int, vector: QuantizedVector) raises:
         if vector.size() != self.dim:
             raise Error("dimension mismatch")
-        for i in range(self.dim):
-            self.data.append(vector.data[i])
-        self.scales.append(vector.scale)
-        self.norms.append(vector.norm)
+        self.data.extend(Span(vector.data))
+        self.factors.append(
+            vector.scale / vector.norm if vector.norm > 0.0 else 0.0
+        )
         self.ids.append(id)
         self.count += 1
 
@@ -94,8 +88,7 @@ struct Index(Movable):
         """Pre-size the backing store; growth during a bulk load is the
         single largest avoidable cost when indexing millions of rows."""
         self.data.reserve(vectors * self.dim)
-        self.scales.reserve(vectors)
-        self.norms.reserve(vectors)
+        self.factors.reserve(vectors)
         self.ids.reserve(vectors)
 
     def _row(self, position: Int) -> Span[Int8, origin_of(self.data)]:
@@ -116,7 +109,7 @@ struct Index(Movable):
         if self.count == 0:
             return List[SearchHit]()
 
-        if self.count >= PARALLEL_THRESHOLD:
+        if self.count * self.dim >= PARALLEL_WORK_THRESHOLD:
             return self._search_parallel(query, k)
         return self._search_range(query, k, 0, self.count)
 
@@ -136,16 +129,17 @@ struct Index(Movable):
         var worst_at = 0
 
         var qspan = Span(query.data)
-        var query_scale = query.scale
-        var query_norm = query.norm if query.norm > 0.0 else Float32(1.0)
+        var query_factor = (
+            query.scale / query.norm if query.norm > 0.0 else Float32(0.0)
+        )
 
         for position in range(start, end):
-            var norm = self.norms[position]
-            if norm <= 0.0:
+            var factor = self.factors[position]
+            if factor == 0.0:
                 continue
 
             var raw = Float32(Int(dot_i8(qspan, self._row(position))))
-            var score = (raw * query_scale * self.scales[position]) / (query_norm * norm)
+            var score = raw * query_factor * factor
 
             if len(best) < wanted:
                 best.append(SearchHit(self.ids[position], score))

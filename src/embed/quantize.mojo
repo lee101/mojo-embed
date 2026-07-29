@@ -11,10 +11,10 @@ it buys back on data that is already centred.
 """
 
 from std.math import sqrt
-from std.sys.info import simd_width_of
+from std.sys.info import simd_width_of as simdwidthof
 
-comptime F32_WIDTH = simd_width_of[DType.float32]()
-comptime I8_WIDTH = simd_width_of[DType.int8]()
+comptime F32_WIDTH = simdwidthof[DType.float32]()
+comptime I8_WIDTH = simdwidthof[DType.int8]()
 
 # int8 spans -127..127. -128 is excluded so negation is symmetric and a
 # scale computed from the maximum magnitude never overflows on the low side.
@@ -87,26 +87,49 @@ def quantize(values: Span[Float32, _]) -> QuantizedVector:
     var scale = peak / INT8_MAX if peak > 0.0 else Float32(1.0)
     var inv = Float32(1.0) / scale
 
-    var out = List[Int8](capacity=n)
-    for i in range(n):
+    var output = List[Int8](length=n, fill=0)
+    var src = values.unsafe_ptr()
+    var dst = Span(output).unsafe_ptr()
+    comptime W = simdwidthof[DType.float32]()
+    var i = 0
+    while i + W <= n:
+        var scaled = src.load[width=W](i) * inv
+        var rounded = scaled.ge(0.0).select(scaled + 0.5, scaled - 0.5)
+        var integers = min(
+            max(rounded.cast[DType.int32](), SIMD[DType.int32, W](-127)),
+            SIMD[DType.int32, W](127),
+        )
+        dst.store(i, integers.cast[DType.int8]())
+        i += W
+
+    while i < n:
         var scaled = values[i] * inv
-        # Round half away from zero, then clamp: a value at the boundary must
-        # not wrap to the opposite sign.
         var rounded = Int(scaled + 0.5) if scaled >= 0.0 else Int(scaled - 0.5)
         if rounded > 127:
             rounded = 127
         elif rounded < -127:
             rounded = -127
-        out.append(Int8(rounded))
+        output[i] = Int8(rounded)
+        i += 1
 
-    return QuantizedVector(out^, scale, l2_norm(values))
+    return QuantizedVector(output^, scale, l2_norm(values))
 
 
 def dequantize(vector: QuantizedVector) -> List[Float32]:
-    var out = List[Float32](capacity=vector.size())
-    for i in range(vector.size()):
-        out.append(Float32(Int(vector.data[i])) * vector.scale)
-    return out^
+    var n = vector.size()
+    var output = List[Float32](length=n, fill=0.0)
+    var src = Span(vector.data).unsafe_ptr()
+    var dst = Span(output).unsafe_ptr()
+    comptime W = simdwidthof[DType.float32]()
+    var i = 0
+    while i + W <= n:
+        var values = src.load[width=W](i).cast[DType.float32]()
+        dst.store(i, values * vector.scale)
+        i += W
+    while i < n:
+        output[i] = Float32(Int(vector.data[i])) * vector.scale
+        i += 1
+    return output^
 
 
 def normalize(mut values: List[Float32]):
@@ -115,8 +138,15 @@ def normalize(mut values: List[Float32]):
     if norm <= 0.0:
         return
     var inv = Float32(1.0) / norm
-    for i in range(len(values)):
-        values[i] = values[i] * inv
+    var ptr = Span(values).unsafe_ptr()
+    comptime W = simdwidthof[DType.float32]()
+    var i = 0
+    while i + W <= len(values):
+        ptr.store(i, ptr.load[width=W](i) * inv)
+        i += W
+    while i < len(values):
+        values[i] *= inv
+        i += 1
 
 
 def _load_f32(values: Span[Float32, _], offset: Int) -> SIMD[DType.float32, F32_WIDTH]:

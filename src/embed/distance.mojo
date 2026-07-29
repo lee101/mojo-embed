@@ -10,8 +10,6 @@ saturation checks in the inner loop.
 """
 
 from std.math import sqrt
-from std.sys.info import simd_width_of
-
 from embed.quantize import I8_WIDTH, F32_WIDTH, QuantizedVector, _load_f32, _load_i8
 
 # Unrolling by four independent accumulators hides FMA latency: one chain
@@ -84,9 +82,6 @@ def dot_i8(a: Span[Int8, _], b: Span[Int8, _]) -> Int32:
 
 def cosine_f32(a: Span[Float32, _], b: Span[Float32, _]) -> Float32:
     """Cosine similarity. Use `dot_f32` directly if both are already unit."""
-    var dot = Float32(0.0)
-    var norm_a = Float32(0.0)
-    var norm_b = Float32(0.0)
     var n = min(len(a), len(b))
 
     var acc_d = SIMD[DType.float32, F32_WIDTH](0.0)
@@ -102,9 +97,9 @@ def cosine_f32(a: Span[Float32, _], b: Span[Float32, _]) -> Float32:
         acc_b = bv.fma(bv, acc_b)
         i += F32_WIDTH
 
-    dot = acc_d.reduce_add()
-    norm_a = acc_a.reduce_add()
-    norm_b = acc_b.reduce_add()
+    var dot = acc_d.reduce_add()
+    var norm_a = acc_a.reduce_add()
+    var norm_b = acc_b.reduce_add()
 
     while i < n:
         dot += a[i] * b[i]

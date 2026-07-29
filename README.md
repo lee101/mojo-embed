@@ -4,16 +4,8 @@ Fast int8 vector search in [Mojo](https://www.modular.com/mojo). SIMD kernels,
 symmetric int8 quantisation, and an exact flat index that parallelises across
 cores.
 
-Measured on a 36-core box, 768-dimensional vectors:
-
-| | ns per dot | vs scalar |
-|---|---|---|
-| scalar f32 | 3,340 | 1× |
-| **SIMD f32** | **238** | **14×** |
-| **SIMD int8** | **108** | **31×** |
-
-Memory for 100k × 768d: **74 MB int8** against 293 MB float32 — a 4× reduction,
-which is what actually bounds vector search.
+Memory for 100k × 768d is about **74 MiB int8** against 293 MiB float32, a 4×
+reduction. Memory traffic is what bounds an exhaustive vector scan.
 
 ```mojo
 from embed.index import Index
@@ -58,6 +50,7 @@ src/embed/
   quantize.mojo   symmetric int8 quantisation, L2 norm, max-abs  (SIMD)
   distance.mojo   dot / cosine / euclidean, f32 and int8         (SIMD)
   index.mojo      flat index, exact top-k, parallel scan
+  capi.mojo       zero-copy C ABI used by Python/NumPy
 ```
 
 - `dot_f32` uses four independent accumulators, because one FMA chain stalls
@@ -67,8 +60,43 @@ src/embed/
   inner loop.
 - Top-k tracks the worst score *and its position* incrementally. Rescanning the
   heap on every improvement was adding ~45% to the scan.
-- Search shards across cores above 20k vectors; below that, thread setup costs
-  more than the scan saves.
+- Quantise, dequantise, normalise, max-abs, norms, and every distance kernel
+  use native-width SIMD with a scalar tail.
+- `Index` shards only above 15 million dimension-products. The zero-copy C ABI
+  uses a higher 100 million threshold because its serial pointer loop is
+  cheaper. Both thresholds were measured on the benchmark host.
+- The index stores `scale / norm` as one float per row instead of retaining
+  separate scale and norm arrays.
+
+## Benchmark
+
+`pixi run bench` builds the shared library and runs `bench/bench.py` under
+`flock /tmp/mojo-bench.lock`. Mojo and NumPy receive the same contiguous
+arrays; buffers cross the C ABI by address without copies. Every case is
+warmed up and reports the median of seven repeats.
+
+Measured on an Intel Xeon E5-2697 v4, Python 3.13.14, and NumPy 2.5.1:
+
+| Operation | Input size | mojo-embed | NumPy | Speedup |
+|---|---:|---:|---:|---:|
+| Float32 dot | 771 dims | 1.34 us | 1.13 us | 0.84x |
+| Int8 dot | 771 dims | 1.28 us | 5.36 us | 4.19x |
+| Cosine similarity | 771 dims | 1.40 us | 4.99 us | 3.56x |
+| Euclidean distance | 771 dims | 1.39 us | 6.05 us | 4.34x |
+| Symmetric quantize | 1,000,003 dims | 1.17 ms | 13.07 ms | 11.16x |
+| L2 normalize | 1,000,003 dims | 509.73 us | 457.50 us | 0.90x |
+| Exact int8 top-10 (serial) | 10,000 × 768 | 856.46 us | 5.28 ms | 6.16x |
+| Exact int8 top-10 (parallel) | 200,000 × 768 | 19.47 ms | 113.26 ms | 5.82x |
+
+The odd sizes exercise scalar SIMD tails. The exact-search baseline uses
+NumPy int32 accumulation over the same int8 matrix, followed by
+`argpartition`; setup and quantisation are outside both search timings.
+Ratios below 1.0 mean mojo-embed is slower.
+
+As an optimization checkpoint, the original native benchmark on the same
+host went from 766 ms to 388 ms to build a 100k × 768 index, and from
+4.245 ms to 3.221 ms for top-10 search. Those checkpoint timings are single
+locked runs; the release comparison above is the median benchmark.
 
 ## Honest limits
 
@@ -77,16 +105,13 @@ src/embed/
 - **No ANN index.** Flat scan only. Fine to a few million vectors; past that
   you want IVF or a graph.
 - **No embedding model.** This searches vectors; it does not produce them.
-- **Search is ~152 qps** on 100k × 768d single-query. That is one query at a
-  time using all cores. Batched queries would amortise far better and are the
-  obvious next optimisation.
 - **No persistence.** The index lives in memory; save and load are not written.
 
 ## Build
 
 ```bash
-pixi run mojo build tests/test_embed.mojo -I src -o test_embed && ./test_embed
-pixi run mojo build bench/bench.mojo -I src -o bench && ./bench
+pixi run test
+pixi run bench
 ```
 
 Or use it in your own project:
@@ -105,4 +130,4 @@ ported.
 
 ## Licence
 
-Apache-2.0.
+MIT.
