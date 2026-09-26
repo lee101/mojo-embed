@@ -119,6 +119,34 @@ def main() raises:
 
     print("  ok    memory", index.memory_bytes(), "bytes for", index.size(), "x 64d")
 
+    # Above PARALLEL_WORK_THRESHOLD the index shards the scan across cores.
+    # Nothing else in this file gets that big, so check the sharded search
+    # against the serial scan it is supposed to agree with: same ids, same
+    # scores. A threaded body that wrote to a slot nobody reduced back would
+    # still pass a self-retrieval test and fail here.
+    var big = Index(64)
+    big.reserve(240_000)
+    var seed = 20260926
+    var v = List[Float32](capacity=64)
+    for row in range(240_000):
+        v.clear()
+        for _ in range(64):
+            seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+            v.append(Float32(seed % 20001) * 0.0001 - 1.0)
+        big.add(row, Span(v))
+
+    var bq = quantize(Span(probe))
+    var sharded = big.search_quantized(bq, 10)
+    var serial = big._search_range(bq, 10, 0, big.size())
+    var agree = len(sharded) == len(serial)
+    for i in range(len(serial)):
+        if sharded[i].id != serial[i].id or sharded[i].score != serial[i].score:
+            agree = False
+    if not agree:
+        print("  FAIL  sharded search disagrees with the serial scan"); bad += 1
+    else:
+        print("  ok    sharded search matches serial over", big.size(), "x 64d")
+
     print("")
     if bad == 0:
         print("all checks passed")

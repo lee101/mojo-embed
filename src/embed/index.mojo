@@ -10,7 +10,7 @@ Vectors are stored in one contiguous block rather than a list of lists, so a
 scan walks memory linearly and the prefetcher does its job.
 """
 
-from std.algorithm import parallelize
+from max.algorithm import parallelize
 from std.sys.info import num_performance_cores
 
 from embed.distance import dot_i8
@@ -175,8 +175,7 @@ struct Index(Movable):
         for _ in range(shards):
             partials.append(List[SearchHit]())
 
-        @parameter
-        def scan(shard: Int):
+        def scan(shard: Int) { mut self, imm query, imm k, imm per, mut partials }:
             var start = shard * per
             var end = min(start + per, self.count)
             if start >= end:
@@ -186,7 +185,7 @@ struct Index(Movable):
             except:
                 pass
 
-        parallelize[scan](shards, shards)
+        parallelize(scan, shards, shards)
 
         for shard in range(shards):
             for i in range(len(partials[shard])):

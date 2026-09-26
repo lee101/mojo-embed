@@ -1,6 +1,6 @@
 """Zero-copy C ABI for benchmarking and embedding in Python extensions."""
 
-from std.algorithm import parallelize
+from max.algorithm import parallelize
 from std.math import sqrt
 from std.sys.info import num_performance_cores, simd_width_of as simdwidthof
 
@@ -229,8 +229,7 @@ def score_rows(
             num_performance_cores(), max(1, count // 8_000)
         )
 
-    @parameter
-    def scan(worker: Int):
+    def scan(worker: Int) { imm data, imm factors, imm query, imm query_factor, imm scores, imm count, imm dim, imm workers }:
         var start = worker * count // workers
         var end = (worker + 1) * count // workers
         for row in range(start, end):
@@ -245,7 +244,7 @@ def score_rows(
         and count * dim >= PARALLEL_WORK_THRESHOLD
         and workers > 1
     ):
-        parallelize[scan](workers, workers)
+        parallelize(scan, workers, workers)
     else:
         scan(0)
 

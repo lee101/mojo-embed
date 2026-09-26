@@ -7,10 +7,12 @@ version = "0.1.0"
 license = "MIT"
 
 [tasks]
+build = "mkdir -p build && mojo build --emit shared-lib src/embed/capi.mojo -I src -o build/libmojo_embed.so"
 test = "mkdir -p build && mojo build tests/test_embed.mojo -I src -o build/test_embed && build/test_embed && mojo build --emit shared-lib src/embed/capi.mojo -I src -o build/libmojo_embed.so && python tests/test_capi.py"
 bench = "flock /tmp/mojo-bench.lock bash -c 'mkdir -p build && mojo build --emit shared-lib src/embed/capi.mojo -I src -o build/libmojo_embed.so && python bench/bench.py'"
 
 [dependencies]
 mojo = "==1.2.0.dev2026092605"
+max = "==26.7.0.dev2026092605"
 numpy = ">=2.0,<3"
 python = ">=3.12,<3.14"
