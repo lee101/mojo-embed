@@ -11,6 +11,6 @@ test = "mkdir -p build && mojo build tests/test_embed.mojo -I src -o build/test_
 bench = "flock /tmp/mojo-bench.lock bash -c 'mkdir -p build && mojo build --emit shared-lib src/embed/capi.mojo -I src -o build/libmojo_embed.so && python bench/bench.py'"
 
 [dependencies]
-mojo = "==1.0.0b3.dev2026072406"
+mojo = "==1.2.0.dev2026092605"
 numpy = ">=2.0,<3"
 python = ">=3.12,<3.14"
